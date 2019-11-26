@@ -6,47 +6,46 @@
 {-# LANGUAGE TypeFamilies #-}
 module Web where
 
-import           Control.Monad.IO.Class (liftIO)
-import           Data.Aeson hiding (json)
-import           Data.Text (Text)
-import           Database.Beam
-import           Database.Beam.Postgres
-import           Database.PostgreSQL.Simple (Connection, connectPostgreSQL)
-import           GHC.Generics (Generic)
-import           Network.Wai.Handler.Warp hiding (FileInfo)
-import           Network.Wai.Middleware.Cors
-import           Servant
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Reader (ReaderT, runReaderT)
+import Database.Beam.Postgres (Connection)
+import Database.PostgreSQL.Simple (Connection, connectPostgreSQL)
+import Network.Wai.Handler.Warp (run)
+import Network.Wai.Middleware.Cors (simpleCors)
+import Servant
+import Servant.Auth.Server
 
-import           Database
-import           Model
+import Account
+import Auth
+import Database
+import Model
+import App
 
-type API = "users" :> ReqBody '[JSON] PostUserRequest :> Post '[JSON] PostUserResponse
+type API = AccountAPI :<|> AuthAPI
 
-data PostUserRequest = PostUserRequest Text deriving (Eq, Generic, Show)
-data PostUserResponse = PostUserResponse Text deriving (Eq, Generic, Show)
-
-instance FromJSON PostUserRequest
-instance ToJSON PostUserResponse
-
-insertUser :: Connection -> Text -> IO ()
-insertUser dbConn username = do
-  runBeamPostgres dbConn $ runInsert $ insert (_dbUsers db) $ insertExpressions [ User default_ (val_ username) ]
-
-postUserHandler :: Connection -> PostUserRequest -> Handler PostUserResponse
-postUserHandler dbConn (PostUserRequest username) = do
-  liftIO $ insertUser dbConn username
-  return $ PostUserResponse username
-
-server1 :: Connection -> Server API
-server1 dbConn = postUserHandler dbConn
+apiServer :: ServerT API AppM
+apiServer = accountServer :<|> authServer
 
 api :: Proxy API
 api = Proxy
 
-app :: Connection -> Application
-app conn = simpleCors $ serve api (server1 conn)
+nt :: AppConf -> AppM a -> Handler a
+nt conf x = runReaderT x conf
+
+app :: AppConf -> Application
+app conf = serveWithContext api serverAuthContext $ hoistServerWithContext api (Proxy :: Proxy '[CookieSettings, JWTSettings]) (nt conf) apiServer
+  where
+    serverAuthContext = appCookieSettings conf :. appJwtSettings conf :. EmptyContext
 
 server :: IO ()
 server = do
+  myKey <- generateKey
+  let jwtCfg = defaultJWTSettings myKey
   dbConn <- connectPostgreSQL "postgresql://{{cookiecutter.project_slug}}:{{cookiecutter.project_slug}}123@localhost/{{cookiecutter.project_slug}}_dev"
-  run 8081 (app dbConn)
+  let conf = AppConf
+             { appDb = dbConn
+             , appJwtSettings = jwtCfg
+             , appCookieSettings = defaultCookieSettings
+             , appJwtKey = myKey
+             }
+  run 8081 $ (app conf)
