@@ -4,11 +4,10 @@ let
   haskellPackages = pkgs.haskell.packages.${compiler}.override {
     overrides = self: super: {
       beam-core = self.callPackage ./beam-core-0.8.0.0.nix {};
-      beam-postgres = pkgs.haskell.lib.dontCheck (
-        self.callPackage ./beam-postgres-0.4.0.0.nix {
-          postgres = pkgs.postgresql_10;
-        }
-      );
+      beam-postgres = self.callPackage ./beam-postgres-0.4.0.0.nix {
+        postgres = pkgs.postgresql_10;
+        hedgehog = self.callHackage "hedgehog" "0.6.1" {};
+      };
       beam-migrate = self.callPackage ./beam-migrate-0.4.0.1.nix {};
     };
   };
